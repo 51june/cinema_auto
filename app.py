@@ -42,11 +42,10 @@ uploaded_file = st.file_uploader("📸 拍照或选择手机相册中的截图",
 def encode_image(uploaded_file):
     return base64.b64encode(uploaded_file.read()).decode('utf-8')
 
-# 【新增超级强力清洗器】：专门用来干掉一切网页复制带来的隐形乱码字符（如 \u200b, \xa0 等）
+# 【防御机制 1】：强力清洗器，专门干掉从网页复制可能带来的隐形乱码字符
 def clean_url_string(url_str):
     if not url_str:
         return ""
-    # 只允许保留正常的印刷 ASCII 字符（如英文字母、数字、冒号、斜杠、点等），其余一律剔除
     return re.sub(r'[^\x21-\x7E]', '', url_str)
 
 def analyze_image_with_ai(image_base64, api_key, provider):
@@ -84,11 +83,7 @@ def analyze_image_with_ai(image_base64, api_key, provider):
     text_response = ""
     
     if provider == "智谱清言 GLM-4V (国内直连推荐)":
-        # 强制使用清洗器，100% 杜绝 No connection adapters 报错
-        raw_url = "[https://open.bigmodel.cn/api/paas/v4/chat/completions](https://open.bigmodel.cn/api/paas/v4/chat/completions)"
-        url = clean_url_string(raw_url)
-        
-        # 顺便把 API Key 可能附带的隐形空格也清洗干净
+        url = clean_url_string("https://open.bigmodel.cn/api/paas/v4/chat/completions")
         clean_api_key = str(api_key).strip().replace(" ", "")
         
         headers = {
@@ -108,7 +103,8 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             ]
         }
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            # 增加 proxies={...} 兜底阻断本地不规范代理导致的连接适配器报错
+            response = requests.post(url, headers=headers, json=payload, timeout=30, proxies={"http": None, "https": None})
             res_json = response.json()
             if 'error' in res_json:
                 st.error(f"API 错误反馈: {res_json['error']['message']}")
@@ -119,35 +115,38 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             return None
             
     elif provider == "Gemini (需科学上网)":
-        # 同步对 Gemini 的 URL 进行去隐形乱码清洗
         clean_key = str(api_key).strip().replace(" ", "")
-        raw_url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){clean_key}"
-        url = clean_url_string(raw_url)
+        url = clean_url_string(f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={clean_key}")
         
         headers = {'Content-Type': 'application/json'}
         payload = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "image/jpeg", "data": image_base64}}]}]}
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response = requests.post(url, headers=headers, json=payload, timeout=30, proxies={"http": None, "https": None})
             res_json = response.json()
             if 'candidates' not in res_json:
-                st.error(f"Gemini 未能成功返回有效内容，请检查 Key 或网络状态。完整返回: {res_json}")
+                st.error(f"Gemini 未能成功返回有效内容。完整返回: {res_json}")
                 return None
             text_response = res_json['candidates'][0]['content']['parts'][0]['text']
         except Exception as e:
             st.error(f"请求 Gemini API 接口失败: {str(e)}")
             return None
 
-    # 核心安全解析机制，防止大模型吐出非标准数据
+    # 【防御机制 2】：核心安全数据抽取，粉碎 "Expecting value" 报错
     if text_response:
         try:
+            # 剥离大模型顽固附带的 markdown 外壳
             clean_text = text_response.replace("```json", "").replace("```", "").strip()
+            
+            # 用正则表达式把大括号 {} 及其内部的合法 JSON 数据完整抠出来
             json_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
             if json_match:
                 clean_text = json_match.group()
+                
             return json.loads(clean_text)
         except Exception as json_err:
-            st.error(f"❌ 文本转换为表格失败！AI 本次并未返回标准数据。")
-            st.warning(f"💡 AI 的实际回复内容为：\n\n{text_response}")
+            # 解析失败时，用醒目的方式捕获并打印出 AI 吐出的原生文字，防止程序闪退
+            st.error(f"❌ 文本转换为表格失败！大模型未能按规定格式返回标准数据。")
+            st.warning(f"💡 AI 本次的实际回复内容为（可根据此原话排查原因）：\n\n{text_response}")
             return None
             
     return None
