@@ -30,7 +30,8 @@ st.write("上传购票界面的座位截图，系统将自动识别并更新至 
 
 st.sidebar.header("⚙️ 配置中心")
 api_key = st.sidebar.text_input("请输入大模型 API Key", type="password")
-model_provider = st.sidebar.selectbox("选择AI模型供应商", ["Gemini (推荐)", "OpenAI GPT-4o"])
+# 【代码已更新】：在这里加入了国内直连的智谱模型选项
+model_provider = st.sidebar.selectbox("选择AI模型供应商", ["智谱清言 GLM-4V (国内直连推荐)", "Gemini (需科学上网)"])
 
 if 'excel_data' not in st.session_state:
     df_init = pd.DataFrame([
@@ -74,7 +75,39 @@ def analyze_image_with_ai(image_base64, api_key, provider):
     }
     """
     
-    if provider == "Gemini (推荐)":
+    # 【代码已更新】：加入了智谱 GLM-4V 的接口逻辑
+    if provider == "智谱清言 GLM-4V (国内直连推荐)":
+        url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "glm-4v",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+                    ]
+                }
+            ]
+        }
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            res_json = response.json()
+            if 'error' in res_json:
+                st.error(f"API 错误: {res_json['error']['message']}")
+                return None
+            text_response = res_json['choices'][0]['message']['content']
+            text_response = text_response.replace("```json", "").replace("```", "").strip()
+            return json.loads(text_response)
+        except Exception as e:
+            st.error(f"AI 识别出错啦: {str(e)}")
+            return None
+            
+    elif provider == "Gemini (需科学上网)":
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         headers = {'Content-Type': 'application/json'}
         payload = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "image/jpeg", "data": image_base64}}]}]}
@@ -87,9 +120,6 @@ def analyze_image_with_ai(image_base64, api_key, provider):
         except Exception as e:
             st.error(f"AI 识别出错啦: {str(e)}")
             return None
-    else:
-        st.info("GPT-4o 接口逻辑已集成，请输入合法的密钥使用。")
-        return None
 
 if uploaded_file is not None:
     st.image(uploaded_file, caption='已上传的截图', use_container_width=True)
@@ -111,22 +141,18 @@ if uploaded_file is not None:
             
             df = st.session_state['excel_data'].copy()
             
-            # 【核心修改逻辑】：寻找同影院、同日期、同时间档的行
             exact_match = (df['影院名称'] == result['cinema_name']) & (df['日期'] == result['date']) & (df['时间档'] == result['time_slot'])
             
             if exact_match.any():
-                # 找到了完全一样的场次，直接覆盖更新数据！
                 idx = df[exact_match].index[0]
                 df.loc[idx, '总座位数'] = result['total_seats']
                 df.loc[idx, '已售'] = result['sold_seats']
                 df.loc[idx, '最后更新时间'] = result['update_time']
                 st.info(f"🔄 检测到相同场次，已自动为您更新实时数据。")
             else:
-                # 没找到完全相同的场次，看看影院存在不
                 cinema_match = df['影院名称'] == result['cinema_name']
                 if cinema_match.any():
                     idx_list = df[cinema_match].index
-                    # 如果该影院只有初始化时留下的一行空白数据，则直接覆盖这行空白数据
                     if len(idx_list) == 1 and df.loc[idx_list[0], '日期'] == "":
                         df.loc[idx_list[0], '日期'] = result['date']
                         df.loc[idx_list[0], '时间档'] = result['time_slot']
@@ -134,12 +160,10 @@ if uploaded_file is not None:
                         df.loc[idx_list[0], '已售'] = result['sold_seats']
                         df.loc[idx_list[0], '最后更新时间'] = result['update_time']
                     else:
-                        # 如果已有其他场次数据，则在下方追加一行新场次
                         idx = idx_list[-1]
                         new_row = {"影院名称": result['cinema_name'], "日期": result['date'], "时间档": result['time_slot'], "总座位数": result['total_seats'], "已售": result['sold_seats'], "最后更新时间": result['update_time']}
                         df = pd.concat([df.iloc[:idx+1], pd.DataFrame([new_row]), df.iloc[idx+1:]], ignore_index=True)
                 else:
-                    # 连影院名字都没有，直接在最后追加
                     new_row = {"影院名称": result['cinema_name'], "日期": result['date'], "时间档": result['time_slot'], "总座位数": result['total_seats'], "已售": result['sold_seats'], "最后更新时间": result['update_time']}
                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 
