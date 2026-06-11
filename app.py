@@ -30,7 +30,6 @@ st.write("上传购票界面的座位截图，系统将自动识别并更新至 
 
 st.sidebar.header("⚙️ 配置中心")
 api_key = st.sidebar.text_input("请输入大模型 API Key", type="password")
-# 【代码已更新】：在这里加入了国内直连的智谱模型选项
 model_provider = st.sidebar.selectbox("选择AI模型供应商", ["智谱清言 GLM-4V (国内直连推荐)", "Gemini (需科学上网)"])
 
 if 'excel_data' not in st.session_state:
@@ -55,27 +54,28 @@ def encode_image(uploaded_file):
     return base64.b64encode(uploaded_file.read()).decode('utf-8')
 
 def analyze_image_with_ai(image_base64, api_key, provider):
+    # 【核心修改点】：更新了极其严格的提示词，逼迫 AI 真实数数
     prompt = """
-    你是一个专业的影院座位数据分析专家。请仔细分析这张电影院座位图的截图，并提取以下信息：
+    你是一个专业的影院座位数据分析专家。请务必仔细看图，真实计算，绝不能捏造数据！请提取以下信息：
     1. 影院名称（例如：UME影城（上海新天地店）中的“UME影城 新天地”，请规范化为表格中的名字）
     2. 观影日期（如“今天 06月11日”提取出 “6月11日”）
     3. 时间档（如 “13:50” 或 “16:05”）
     4. 截图左上角的手机系统时间（作为最后更新时间，例如“13:46”）
-    5. 总座位数：请以中间灰色竖向虚线为界，仔细按排数清点所有方格。
+    5. 总座位数：必须重新清点！请以中间灰色竖向虚线为界，仔细按排数清点所有方格（注意每排左右可能不对称）。
     6. 已售座位数：仔细清点所有变红/带有头像的红色已售方格数量。
 
-    请严格以 JSON 格式输出，不要包含任何 Markdown 标记或多余文字，结构如下：
+    请严格以 JSON 格式输出，不要包含任何 Markdown 标记或多余文字。
+    注意：下面示例中的数字 0 仅为格式参考，你必须输出你真实数出来的总座位数和已售数！
     {
-        "cinema_name": "UME影城 新天地",
-        "date": "6月11日",
-        "time_slot": "13:50",
-        "total_seats": 157,
+        "cinema_name": "示例影城",
+        "date": "1月1日",
+        "time_slot": "12:00",
+        "total_seats": 0,
         "sold_seats": 0,
-        "update_time": "14:03"
+        "update_time": "12:00"
     }
     """
     
-    # 【代码已更新】：加入了智谱 GLM-4V 的接口逻辑
     if provider == "智谱清言 GLM-4V (国内直连推荐)":
         url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
         headers = {
@@ -126,13 +126,13 @@ if uploaded_file is not None:
     
     if st.button("🚀 开始自动分析并录入表格"):
         if not api_key:
-            st.warning("⚠️ 演示模式：将使用 16:05 场次模拟数据更新（填入 API Key 即可真实读图）")
+            st.warning("⚠️ 演示模式：将使用演示数据更新（填入 API Key 即可真实读图计算）")
             result = {
                 "cinema_name": "UME影城 新天地", "date": "6月11日", "time_slot": "16:05", 
                 "total_seats": 157, "sold_seats": 2, "update_time": "14:10"
             }
         else:
-            with st.spinner("AI 正在疯狂数座位中，请稍候..."):
+            with st.spinner("AI 正在严谨地查数座位中，请稍候..."):
                 img_b64 = encode_image(uploaded_file)
                 result = analyze_image_with_ai(img_b64, api_key, model_provider)
         
@@ -187,50 +187,4 @@ def convert_df_to_excel(df_data):
     thin_side = Side(border_style="thin", color="D9D9D9")
     border_all = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
     
-    headers = ["影院名称\n(预售开启后更新影院列表)", "日期", "时间档", "总座位数", "已售", "占比", "最后更新时间(精确到分)"]
-    ws.append(headers)
-    ws.row_dimensions[1].height = 28
-    
-    for col_num, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_num)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border = border_all
-
-    for r_idx, row in enumerate(df_data.itertuples(index=False), 2):
-        row_vals = [row[0], row[1], row[2], row[3], row[4], "", row[5]]
-        ws.append(row_vals)
-        ws.row_dimensions[r_idx].height = 22
-        
-        for c_idx in range(1, 8):
-            cell = ws.cell(row=r_idx, column=c_idx)
-            cell.font = data_font
-            cell.border = border_all
-            cell.fill = zebra_fill if r_idx % 2 == 0 else white_fill
-            
-            if c_idx == 1:
-                cell.alignment = Alignment(horizontal="left", vertical="center")
-            elif c_idx in [2, 3, 7]:
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-            elif c_idx in [4, 5]:
-                cell.alignment = Alignment(horizontal="right", vertical="center")
-                if cell.value != "": cell.number_format = '#,##0'
-            elif c_idx == 6:
-                cell.alignment = Alignment(horizontal="right", vertical="center")
-                cell.number_format = '0.0%'
-                cell.value = f'=IFERROR(E{r_idx}/D{r_idx}, "")'
-                
-    ws.column_dimensions['A'].width = 32
-    ws.column_dimensions['G'].width = 24
-    wb.save(output)
-    return output.getvalue()
-
-if st.button("📥 下载已更新的专业 Excel 报表"):
-    excel_bytes = convert_df_to_excel(st.session_state['excel_data'])
-    st.download_button(
-        label="点击下载 .xlsx 文件",
-        data=excel_bytes,
-        file_name="最新影院预售统计表.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    headers = ["影院名称\n
