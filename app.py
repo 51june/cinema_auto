@@ -42,6 +42,13 @@ uploaded_file = st.file_uploader("📸 拍照或选择手机相册中的截图",
 def encode_image(uploaded_file):
     return base64.b64encode(uploaded_file.read()).decode('utf-8')
 
+# 【新增超级强力清洗器】：专门用来干掉一切网页复制带来的隐形乱码字符（如 \u200b, \xa0 等）
+def clean_url_string(url_str):
+    if not url_str:
+        return ""
+    # 只允许保留正常的印刷 ASCII 字符（如英文字母、数字、冒号、斜杠、点等），其余一律剔除
+    return re.sub(r'[^\x21-\x7E]', '', url_str)
+
 def analyze_image_with_ai(image_base64, api_key, provider):
     prompt = """
     你是一个专业的影院座位数据分析专家。请务必仔细看图，真实计算，绝不能捏造数据！
@@ -77,10 +84,15 @@ def analyze_image_with_ai(image_base64, api_key, provider):
     text_response = ""
     
     if provider == "智谱清言 GLM-4V (国内直连推荐)":
-        # 用 .strip() 彻底清洗可能存在的不可见富文本多余字符或空格
-        url = "[https://open.bigmodel.cn/api/paas/v4/chat/completions](https://open.bigmodel.cn/api/paas/v4/chat/completions)".strip()
+        # 强制使用清洗器，100% 杜绝 No connection adapters 报错
+        raw_url = "[https://open.bigmodel.cn/api/paas/v4/chat/completions](https://open.bigmodel.cn/api/paas/v4/chat/completions)"
+        url = clean_url_string(raw_url)
+        
+        # 顺便把 API Key 可能附带的隐形空格也清洗干净
+        clean_api_key = str(api_key).strip().replace(" ", "")
+        
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {clean_api_key}",
             "Content-Type": "application/json"
         }
         payload = {
@@ -107,7 +119,11 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             return None
             
     elif provider == "Gemini (需科学上网)":
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){api_key}".strip()
+        # 同步对 Gemini 的 URL 进行去隐形乱码清洗
+        clean_key = str(api_key).strip().replace(" ", "")
+        raw_url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){clean_key}"
+        url = clean_url_string(raw_url)
+        
         headers = {'Content-Type': 'application/json'}
         payload = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "image/jpeg", "data": image_base64}}]}]}
         try:
@@ -180,10 +196,8 @@ if uploaded_file is not None:
                     "时间档": time_slot, 
                     "总座位数": total_seats, 
                     "已售": sold_seats, 
-                    "last_update_time": update_time  # 统一在后台字典构建
+                    "最后更新时间": update_time
                 }
-                # 修复可能漏掉的字段名称对应
-                new_row["最后更新时间"] = new_row.pop("last_update_time")
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 
             st.session_state['excel_data'] = df
@@ -243,3 +257,13 @@ def convert_df_to_excel(df_data):
     ws.column_dimensions['A'].width = 32
     ws.column_dimensions['G'].width = 24
     wb.save(output)
+    return output.getvalue()
+
+if st.button("📥 下载已更新的专业 Excel 报表"):
+    excel_bytes = convert_df_to_excel(st.session_state['excel_data'])
+    st.download_button(
+        label="点击下载 .xlsx 文件",
+        data=excel_bytes,
+        file_name="最新影院预售统计表.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
