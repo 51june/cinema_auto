@@ -43,7 +43,7 @@ def encode_image(uploaded_file):
     return base64.b64encode(uploaded_file.read()).decode('utf-8')
 
 def analyze_image_with_ai(image_base64, api_key, provider):
-    # 【已更新】：重新设计了极其严格的上下边界数数逻辑
+    # 【已更新】：极致严格的边界定位 + 牢不可破的 JSON 键名规范
     prompt = """
     你是一个专业的影院座位数据分析专家。请务必仔细看图，真实计算，绝不能捏造数据！
 
@@ -61,15 +61,10 @@ def analyze_image_with_ai(image_base64, api_key, provider):
     3. 总座位数 = 排数 × 每排的格子数。
     4. 已售座位数：在两行之间，仔细数出变红或带有头像的红色格子数量。
 
-    请提取并输出以下信息：
-    1. 影院名称（例如：UME影城（上海新天地店）规范化为“UME影城 新天地”）
-    2. 观影日期（如“今天 06月11日”提取出 “6月11日”）
-    3. 时间档：请提取电影的开始时间（例如：16:15）。
-    4. 截图左上角的手机系统时间（作为最后更新时间，例如“15:56”）
-    5. 总座位数：必须按照上述【计数算法】得出的总数填入。
-    6. 已售座位数：严格清点限定区域内红色的已售方格数量。
-
+    【输出格式要求】：
     请严格以 JSON 格式输出，不要包含任何 Markdown 标记或多余文字。
+    请务必保证输出的 JSON 字典中包含且仅包含以下 6 个键，键名大小写必须完全一致，绝不能擅自更改或漏掉任何一个：
+    
     {
         "cinema_name": "示例影城",
         "date": "1月1日",
@@ -138,30 +133,40 @@ if uploaded_file is not None:
                 result = analyze_image_with_ai(img_b64, api_key, model_provider)
         
         if result:
+            # 【安全防护升级】：全面改用 .get() 方式获取数据，彻底解决 KeyError
+            cinema_name = result.get('cinema_name', '未知影院')
+            date_val = result.get('date', '未知日期')
             raw_time = str(result.get('time_slot', ''))
+            total_seats = result.get('total_seats', 0)
+            sold_seats = result.get('sold_seats', 0)
+            update_time = result.get('update_time', '未识别')
+            
+            # 强制用 Python 正则表达式截取时间档
             time_match = re.search(r'\d{1,2}:\d{2}', raw_time)
             if time_match:
-                result['time_slot'] = time_match.group()
+                time_slot = time_match.group()
+            else:
+                time_slot = raw_time if raw_time else "未知时间"
                 
             st.success("🎉 数据处理成功！")
             
             df = st.session_state['excel_data'].copy()
-            exact_match = (df['影院名称'] == result['cinema_name']) & (df['日期'] == result['date']) & (df['时间档'] == result['time_slot'])
+            exact_match = (df['影院名称'] == cinema_name) & (df['日期'] == date_val) & (df['时间档'] == time_slot)
             
             if exact_match.any():
                 idx = df[exact_match].index[0]
-                df.loc[idx, '总座位数'] = result['total_seats']
-                df.loc[idx, '已售'] = result['sold_seats']
-                df.loc[idx, '最后更新时间'] = result['update_time']
+                df.loc[idx, '总座位数'] = total_seats
+                df.loc[idx, '已售'] = sold_seats
+                df.loc[idx, '最后更新时间'] = update_time
                 st.info(f"🔄 检测到相同场次，已自动为您覆盖更新实时数据。")
             else:
                 new_row = {
-                    "影院名称": result['cinema_name'], 
-                    "日期": result['date'], 
-                    "时间档": result['time_slot'], 
-                    "总座位数": result['total_seats'], 
-                    "已售": result['sold_seats'], 
-                    "最后更新时间": result['update_time']
+                    "影院名称": cinema_name, 
+                    "日期": date_val, 
+                    "时间档": time_slot, 
+                    "总座位数": total_seats, 
+                    "已售": sold_seats, 
+                    "最后更新时间": update_time
                 }
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 
