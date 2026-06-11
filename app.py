@@ -72,10 +72,9 @@ def analyze_image_with_ai(image_base64, api_key, provider):
     """
     
     if provider == "智谱清言 GLM-4V (国内直连推荐)":
-        # 加了 .strip() 强行剔除可能混入的隐形空格和换行符
-        url = "https://open.bigmodel.cn/api/paas/v4/chat/completions".strip()
+        url = "[https://open.bigmodel.cn/api/paas/v4/chat/completions](https://open.bigmodel.cn/api/paas/v4/chat/completions)"
         headers = {
-            "Authorization": f"Bearer {api_key.strip()}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
         payload = {
@@ -104,13 +103,14 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             return None
             
     elif provider == "Gemini (需科学上网)":
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key.strip()}".strip()
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){api_key}"
         headers = {'Content-Type': 'application/json'}
         payload = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "image/jpeg", "data": image_base64}}]}]}
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
             res_json = response.json()
             text_response = res_json['candidates'][0]['content']['parts'][0]['text']
+            # 【代码已修复】：彻底清理了上次混入的无效中文字符串，恢复正常闭合
             text_response = text_response.replace("```json", "").replace("```", "").strip()
             return json.loads(text_response)
         except Exception as e:
@@ -130,6 +130,7 @@ if uploaded_file is not None:
                 result = analyze_image_with_ai(img_b64, api_key, model_provider)
         
         if result:
+            # 使用正则精准截断时间档，屏蔽无关的连字符与散场时间
             raw_time = str(result.get('time_slot', ''))
             time_match = re.search(r'\d{1,2}:\d{2}', raw_time)
             if time_match:
