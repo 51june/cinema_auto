@@ -32,20 +32,9 @@ st.sidebar.header("⚙️ 配置中心")
 api_key = st.sidebar.text_input("请输入大模型 API Key", type="password")
 model_provider = st.sidebar.selectbox("选择AI模型供应商", ["智谱清言 GLM-4V (国内直连推荐)", "Gemini (需科学上网)"])
 
+# 【代码已更新】：完全清空了预设的影院名字，只留空表头
 if 'excel_data' not in st.session_state:
-    df_init = pd.DataFrame([
-        {"影院名称": "和平影都", "日期": "", "时间档": "", "总座位数": "", "已售": "", "最后更新时间": ""},
-        {"影院名称": "大光明电影院 南西", "日期": "", "时间档": "", "总座位数": "", "已售": "", "最后更新时间": ""},
-        {"影院名称": "SFC上影百联 大上海", "日期": "", "时间档": "", "总座位数": "", "已售": "", "最后更新时间": ""},
-        {"影院名称": "UME影城 新天地", "日期": "", "时间档": "", "总座位数": "", "已售": "", "最后更新时间": ""},
-        {"影院名称": "上海科技影城", "日期": "", "时间档": "", "总座位数": "", "已售": "", "最后更新时间": ""},
-        {"影院名称": "大光明 儿艺店", "日期": "", "时间档": "", "总座位数": "", "已售": "", "最后更新时间": ""},
-        {"影院名称": "中影国际 兰生大厦", "日期": "", "时间档": "", "总座位数": "", "已售": "", "最后更新时间": ""},
-        {"影院名称": "国泰电影院", "日期": "", "时间档": "", "总座位数": "", "已售": "", "最后更新时间": ""},
-        {"影院名称": "cooperstar影城", "日期": "", "时间档": "", "总座位数": "", "已售": "", "最后更新时间": ""},
-        {"影院名称": "博悦汇影城BFC外滩金融中心", "日期": "", "时间档": "", "总座位数": "", "已售": "", "最后更新时间": ""},
-        {"影院名称": "万幕国际影城 黄浦店", "日期": "", "时间档": "", "总座位数": "", "已售": "", "最后更新时间": ""}
-    ])
+    df_init = pd.DataFrame(columns=["影院名称", "日期", "时间档", "总座位数", "已售", "最后更新时间"])
     st.session_state['excel_data'] = df_init
 
 uploaded_file = st.file_uploader("📸 拍照或选择手机相册中的截图", type=["jpg", "jpeg", "png"])
@@ -54,10 +43,9 @@ def encode_image(uploaded_file):
     return base64.b64encode(uploaded_file.read()).decode('utf-8')
 
 def analyze_image_with_ai(image_base64, api_key, provider):
-    # 【核心修改点】：更新了极其严格的提示词，逼迫 AI 真实数数
     prompt = """
     你是一个专业的影院座位数据分析专家。请务必仔细看图，真实计算，绝不能捏造数据！请提取以下信息：
-    1. 影院名称（例如：UME影城（上海新天地店）中的“UME影城 新天地”，请规范化为表格中的名字）
+    1. 影院名称（例如：UME影城（上海新天地店）规范化为“UME影城 新天地”）
     2. 观影日期（如“今天 06月11日”提取出 “6月11日”）
     3. 时间档（如 “13:50” 或 “16:05”）
     4. 截图左上角的手机系统时间（作为最后更新时间，例如“13:46”）
@@ -148,24 +136,17 @@ if uploaded_file is not None:
                 df.loc[idx, '总座位数'] = result['total_seats']
                 df.loc[idx, '已售'] = result['sold_seats']
                 df.loc[idx, '最后更新时间'] = result['update_time']
-                st.info(f"🔄 检测到相同场次，已自动为您更新实时数据。")
+                st.info(f"🔄 检测到相同场次，已自动为您覆盖更新实时数据。")
             else:
-                cinema_match = df['影院名称'] == result['cinema_name']
-                if cinema_match.any():
-                    idx_list = df[cinema_match].index
-                    if len(idx_list) == 1 and df.loc[idx_list[0], '日期'] == "":
-                        df.loc[idx_list[0], '日期'] = result['date']
-                        df.loc[idx_list[0], '时间档'] = result['time_slot']
-                        df.loc[idx_list[0], '总座位数'] = result['total_seats']
-                        df.loc[idx_list[0], '已售'] = result['sold_seats']
-                        df.loc[idx_list[0], '最后更新时间'] = result['update_time']
-                    else:
-                        idx = idx_list[-1]
-                        new_row = {"影院名称": result['cinema_name'], "日期": result['date'], "时间档": result['time_slot'], "总座位数": result['total_seats'], "已售": result['sold_seats'], "最后更新时间": result['update_time']}
-                        df = pd.concat([df.iloc[:idx+1], pd.DataFrame([new_row]), df.iloc[idx+1:]], ignore_index=True)
-                else:
-                    new_row = {"影院名称": result['cinema_name'], "日期": result['date'], "时间档": result['time_slot'], "总座位数": result['total_seats'], "已售": result['sold_seats'], "最后更新时间": result['update_time']}
-                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                new_row = {
+                    "影院名称": result['cinema_name'], 
+                    "日期": result['date'], 
+                    "时间档": result['time_slot'], 
+                    "总座位数": result['total_seats'], 
+                    "已售": result['sold_seats'], 
+                    "最后更新时间": result['update_time']
+                }
+                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 
             st.session_state['excel_data'] = df
 
@@ -187,4 +168,50 @@ def convert_df_to_excel(df_data):
     thin_side = Side(border_style="thin", color="D9D9D9")
     border_all = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
     
-    headers = ["影院名称\n
+    headers = ["影院名称(预售开启后更新影院列表)", "日期", "时间档", "总座位数", "已售", "占比", "最后更新时间(精确到分)"]
+    ws.append(headers)
+    ws.row_dimensions[1].height = 28
+    
+    for col_num, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = border_all
+
+    for r_idx, row in enumerate(df_data.itertuples(index=False), 2):
+        row_vals = [row[0], row[1], row[2], row[3], row[4], "", row[5]]
+        ws.append(row_vals)
+        ws.row_dimensions[r_idx].height = 22
+        
+        for c_idx in range(1, 8):
+            cell = ws.cell(row=r_idx, column=c_idx)
+            cell.font = data_font
+            cell.border = border_all
+            cell.fill = zebra_fill if r_idx % 2 == 0 else white_fill
+            
+            if c_idx == 1:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+            elif c_idx in [2, 3, 7]:
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+            elif c_idx in [4, 5]:
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                if cell.value != "": cell.number_format = '#,##0'
+            elif c_idx == 6:
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                cell.number_format = '0.0%'
+                cell.value = f'=IFERROR(E{r_idx}/D{r_idx}, "")'
+                
+    ws.column_dimensions['A'].width = 32
+    ws.column_dimensions['G'].width = 24
+    wb.save(output)
+    return output.getvalue()
+
+if st.button("📥 下载已更新的专业 Excel 报表"):
+    excel_bytes = convert_df_to_excel(st.session_state['excel_data'])
+    st.download_button(
+        label="点击下载 .xlsx 文件",
+        data=excel_bytes,
+        file_name="最新影院预售统计表.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
