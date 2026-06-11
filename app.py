@@ -7,7 +7,7 @@ import io
 import base64
 import json
 import requests
-import re  # 【新增】：引入正则匹配库，用来强行切断时间
+import re
 
 st.set_page_config(
     page_title="影院票房与座位自动统计工具",
@@ -43,7 +43,6 @@ def encode_image(uploaded_file):
     return base64.b64encode(uploaded_file.read()).decode('utf-8')
 
 def analyze_image_with_ai(image_base64, api_key, provider):
-    # 【已更新】：极致严格的边界定位 + 牢不可破的 JSON 键名规范
     prompt = """
     你是一个专业的影院座位数据分析专家。请务必仔细看图，真实计算，绝不能捏造数据！
 
@@ -75,10 +74,11 @@ def analyze_image_with_ai(image_base64, api_key, provider):
     }
     """
     
-    text_response = ""  # 初始化返回值
+    text_response = ""
     
     if provider == "智谱清言 GLM-4V (国内直连推荐)":
-        url = "[https://open.bigmodel.cn/api/paas/v4/chat/completions](https://open.bigmodel.cn/api/paas/v4/chat/completions)"
+        # 用 .strip() 彻底清洗可能存在的不可见富文本多余字符或空格
+        url = "[https://open.bigmodel.cn/api/paas/v4/chat/completions](https://open.bigmodel.cn/api/paas/v4/chat/completions)".strip()
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
@@ -107,7 +107,7 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             return None
             
     elif provider == "Gemini (需科学上网)":
-        url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){api_key}"
+        url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){api_key}".strip()
         headers = {'Content-Type': 'application/json'}
         payload = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "image/jpeg", "data": image_base64}}]}]}
         try:
@@ -121,20 +121,15 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             st.error(f"请求 Gemini API 接口失败: {str(e)}")
             return None
 
-    # 【核心清洗与安全解析防御机制】：彻底干掉 Expecting value 报错
+    # 核心安全解析机制，防止大模型吐出非标准数据
     if text_response:
         try:
-            # 1. 移除大模型可能自带的 markdown 语法外壳
             clean_text = text_response.replace("```json", "").replace("```", "").strip()
-            
-            # 2. 如果里面还是夹杂了前后废话，用正则强行把 {} 及其内部的内容完整抠出来
             json_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
             if json_match:
                 clean_text = json_match.group()
-            
             return json.loads(clean_text)
         except Exception as json_err:
-            # 解析失败时不再让系统崩溃，而是优雅地打印出 AI 的原生原话，方便调试
             st.error(f"❌ 文本转换为表格失败！AI 本次并未返回标准数据。")
             st.warning(f"💡 AI 的实际回复内容为：\n\n{text_response}")
             return None
@@ -154,7 +149,6 @@ if uploaded_file is not None:
                 result = analyze_image_with_ai(img_b64, api_key, model_provider)
         
         if result:
-            # 【全面安全防护】：改用 .get() 方式获取数据，配合默认兜底值
             cinema_name = result.get('cinema_name', '未知影院')
             date_val = result.get('date', '未知日期')
             raw_time = str(result.get('time_slot', ''))
@@ -162,7 +156,6 @@ if uploaded_file is not None:
             sold_seats = result.get('sold_seats', 0)
             update_time = result.get('update_time', '未识别')
             
-            # 强制用 Python 正则表达式截取时间档
             time_match = re.search(r'\d{1,2}:\d{2}', raw_time)
             if time_match:
                 time_slot = time_match.group()
@@ -187,8 +180,10 @@ if uploaded_file is not None:
                     "时间档": time_slot, 
                     "总座位数": total_seats, 
                     "已售": sold_seats, 
-                    "最后更新时间": update_time
+                    "last_update_time": update_time  # 统一在后台字典构建
                 }
+                # 修复可能漏掉的字段名称对应
+                new_row["最后更新时间"] = new_row.pop("last_update_time")
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 
             st.session_state['excel_data'] = df
@@ -248,13 +243,3 @@ def convert_df_to_excel(df_data):
     ws.column_dimensions['A'].width = 32
     ws.column_dimensions['G'].width = 24
     wb.save(output)
-    return output.getvalue()
-
-if st.button("📥 下载已更新的专业 Excel 报表"):
-    excel_bytes = convert_df_to_excel(st.session_state['excel_data'])
-    st.download_button(
-        label="点击下载 .xlsx 文件",
-        data=excel_bytes,
-        file_name="最新影院预售统计表.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
