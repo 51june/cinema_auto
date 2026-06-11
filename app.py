@@ -7,7 +7,7 @@ import io
 import base64
 import json
 import requests
-import re
+import re  # 【新增】：引入正则匹配库，用来强行切断时间
 
 st.set_page_config(
     page_title="影院票房与座位自动统计工具",
@@ -44,23 +44,16 @@ def encode_image(uploaded_file):
 
 def analyze_image_with_ai(image_base64, api_key, provider):
     prompt = """
-    你是一个专业的影院座位数据分析和极其严谨的视觉计数专家。
-    AI系统往往会低估密集的座位网格数量，你必须绝对避免这个错误！你必须使用最高级别的精度重新清点！绝不能凭感觉估算，必须把所有格子当成离散实体一个一个数！
-
-    请提取以下信息：
+    你是一个专业的影院座位数据分析专家。请务必仔细看图，真实计算，绝不能捏造数据！请提取以下信息：
     1. 影院名称（例如：UME影城（上海新天地店）规范化为“UME影城 新天地”）
     2. 观影日期（如“今天 06月11日”提取出 “6月11日”）
-    3. 时间档：请提取电影的开始时间（例如：13:50）。严格过滤散场时间。
-    4. 截图左上角的手机系统时间（作为最后更新时间）。
-    5. 总座位数：必须按排从左到右细致清点！请以中间灰色竖向虚线为界：
-       - 先清点第一排左边几个、右边几个，加起来得出该排总数。
-       - 对所有排重复此绝对精确的清点动作。
-       - **极其重要：必须确保第一排至第五排是15个座位（左7右8）。如果发现你数出来的少于这个数，请立刻重新细致查找边缘格子！第6至9排通常是16个座位。**
-       - 必须确保最后一行两端的空格也作为总座位数清点（如果它们也是方格）。
-       - 把每一排数出来的绝对精确数字加起来。
+    3. 时间档：请提取电影的开始时间（例如：13:50）。
+    4. 截图左上角的手机系统时间（作为最后更新时间，例如“13:46”）
+    5. 总座位数：必须重新清点！请以中间灰色竖向虚线为界，仔细按排数清点所有方格（注意每排左右可能不对称）。
     6. 已售座位数：仔细清点所有变红/带有头像的红色已售方格数量。
 
-    请严格以 JSON 格式输出，不要包含任何 Markdown 标记或多余文字。即使找不到某个信息，也要输出该字段并填空字符串，绝不能遗漏字段！
+    请严格以 JSON 格式输出，不要包含任何 Markdown 标记或多余文字。
+    注意：下面示例中的数字 0 仅为格式参考，你必须输出你真实数出来的总座位数和已售数！
     {
         "cinema_name": "示例影城",
         "date": "1月1日",
@@ -71,14 +64,10 @@ def analyze_image_with_ai(image_base64, api_key, provider):
     }
     """
     
-    # 核心防撞车：彻底过滤 API Key 中可能被粘贴进去的零宽字符/回车符
-    clean_key = re.sub(r'[^a-zA-Z0-9._-]', '', api_key)
-    
     if provider == "智谱清言 GLM-4V (国内直连推荐)":
-        # 核心防撞车：用 Base64 解密生成网址，100% 物理隔绝隐形错误字符
-        url = base64.b64decode("aHR0cHM6Ly9vcGVuLmJpZ21vZGVsLmNuL2FwaS9wYWFzL3Y0L2NoYXQvY29tcGxldGlvbnM=").decode("utf-8")
+        url = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
         headers = {
-            "Authorization": f"Bearer {clean_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
         payload = {
@@ -103,12 +92,11 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             text_response = text_response.replace("```json", "").replace("```", "").strip()
             return json.loads(text_response)
         except Exception as e:
-            st.error(f"AI 识别解析出错啦: {str(e)}")
+            st.error(f"AI 识别出错啦: {str(e)}")
             return None
             
     elif provider == "Gemini (需科学上网)":
-        base_url = base64.b64decode("aHR0cHM6Ly9nZW5lcmF0aXZlbGFuZ3VhZ2UuZ29vZ2xlYXBpcy5jb20vdjFiZXRhL21vZGVscy9nZW1pbmktMS41LWZsYXNoOmdlbmVyYXRlQ29udGVudD9rZXk9").decode("utf-8")
-        url = base_url + clean_key
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         headers = {'Content-Type': 'application/json'}
         payload = {"contents": [{"parts": [{"text": prompt}, {"inlineData": {"mimeType": "image/jpeg", "data": image_base64}}]}]}
         try:
@@ -118,7 +106,7 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             text_response = text_response.replace("```json", "").replace("```", "").strip()
             return json.loads(text_response)
         except Exception as e:
-            st.error(f"AI 识别解析出错啦: {str(e)}")
+            st.error(f"AI 识别出错啦: {str(e)}")
             return None
 
 if uploaded_file is not None:
@@ -134,37 +122,32 @@ if uploaded_file is not None:
                 result = analyze_image_with_ai(img_b64, api_key, model_provider)
         
         if result:
-            cinema_name = result.get('cinema_name', '未知影院')
-            date_str = result.get('date', '未知日期')
-            time_slot = str(result.get('time_slot', ''))
-            total_seats = result.get('total_seats', 0)
-            sold_seats = result.get('sold_seats', 0)
-            update_time = result.get('update_time', '')
-            
-            time_match = re.search(r'\d{1,2}:\d{2}', time_slot)
+            # 【代码已更新】：强制用 Python 正则表达式截取时间档，确保万无一失
+            raw_time = str(result.get('time_slot', ''))
+            time_match = re.search(r'\d{1,2}:\d{2}', raw_time)
             if time_match:
-                time_slot = time_match.group()
+                result['time_slot'] = time_match.group()
                 
             st.success("🎉 数据处理成功！")
             
             df = st.session_state['excel_data'].copy()
             
-            exact_match = (df['影院名称'] == cinema_name) & (df['日期'] == date_str) & (df['时间档'] == time_slot)
+            exact_match = (df['影院名称'] == result['cinema_name']) & (df['日期'] == result['date']) & (df['时间档'] == result['time_slot'])
             
             if exact_match.any():
                 idx = df[exact_match].index[0]
-                df.loc[idx, '总座位数'] = total_seats
-                df.loc[idx, '已售'] = sold_seats
-                df.loc[idx, '最后更新时间'] = update_time
+                df.loc[idx, '总座位数'] = result['total_seats']
+                df.loc[idx, '已售'] = result['sold_seats']
+                df.loc[idx, '最后更新时间'] = result['update_time']
                 st.info(f"🔄 检测到相同场次，已自动为您覆盖更新实时数据。")
             else:
                 new_row = {
-                    "影院名称": cinema_name, 
-                    "日期": date_str, 
-                    "时间档": time_slot, 
-                    "总座位数": total_seats, 
-                    "已售": sold_seats, 
-                    "最后更新时间": update_time
+                    "影院名称": result['cinema_name'], 
+                    "日期": result['date'], 
+                    "时间档": result['time_slot'], 
+                    "总座位数": result['total_seats'], 
+                    "已售": result['sold_seats'], 
+                    "最后更新时间": result['update_time']
                 }
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
                 
