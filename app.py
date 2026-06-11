@@ -42,42 +42,42 @@ uploaded_file = st.file_uploader("📸 拍照或选择手机相册中的截图",
 def encode_image(uploaded_file):
     return base64.b64encode(uploaded_file.read()).decode('utf-8')
 
-# 【防御机制 1】：强力清洗器，专门干掉从网页复制可能带来的隐形乱码字符
 def clean_url_string(url_str):
     if not url_str:
         return ""
     return re.sub(r'[^\x21-\x7E]', '', url_str)
 
 def analyze_image_with_ai(image_base64, api_key, provider):
+    # 【重磅更新】：采用 Few-Shot 范例教学法，用真实的推导逻辑死死卡住 AI 的输出格式
     prompt = """
-    你是一个专业的影院座位数据分析专家。请务必仔细看图，真实计算，绝不能捏造数据！
+    你是一个极其精准的影院座位结构分析机器人。请严格按照以下说明执行，绝对不要输出任何 markdown 表格，绝对不要输出多余解释！
 
-    【核心数数域限制 - 非常重要】：
-    请你在图上先找到两个文字锚点作为边界：
-    - 上边界：写有“XX厅”（例如“2号沙发VIP厅”）的那一行。
-    - 下边界：写有电影版本和语言（例如“国语2D”、“英语3D”或包含时间的行）的那一行。
-    
-    你接下来的所有座位计数，【必须严格限制在上下边界之间】的区域！绝对不能去数上边界以上的“已售/可选”图例方块，也绝对不能数下边界以下的“推荐座位(1人/2人...)”按钮！
+    【核心范围约束】：
+    在图中定位以下两个文本：
+    - 起始线（上边界）：包含“XX厅”字样（如“2号沙发VIP厅”）的行。
+    - 截止线（下边界）：包含电影制式语言（如“国语2D”或“16:15-17:48”）的行。
+    你只能清点这两行夹在中间的方格矩阵。
 
-    【计数算法要求】：
-    在这个限定区域内，请采用“行列乘法”来计算总数，避免肉眼数错：
-    1. 数出这部分区域一共有几排（从上到下）。
-    2. 数出每一排一共有几个座位格子（从左到右）。
-    3. 总座位数 = 排数 × 每排的格子数。
-    4. 已售座位数：在两行之间，仔细数出变红或带有头像的红色格子数量。
+    【严谨计算推导法】：
+    1. 找到上边界和下边界。
+    2. 数出这两行之间一共有多少横排。
+    3. 数出每一排有多少个座位方格（包含所有灰色、黄色、红色的格子）。
+    4. 总座位数 = 排数 × 每排的格子数。
+    5. 已售数 = 仔细清点其中变红或带有小猫/小猫头像的红色格子。
 
-    【输出格式要求】：
-    你必须直接输出符合 JSON 格式的字符串，不要包含任何 markdown 标记（如 ```json），不要包含任何前后解释的废话。
-    请务必保证输出的 JSON 字典中包含且仅包含以下 6 个键，键名大小写必须完全一致，绝不能擅自更改或漏掉任何一个：
-    
+    【请参考以下成功推理范例，你必须严格模仿这个输出格式】：
+    示例输入截图特征：4排，每排7个方格，全空无红格。
+    示例最终输出（你必须且只能输出类似这样的纯 JSON，严禁夹带任何废话或 Markdown 符号）：
     {
-        "cinema_name": "示例影城",
-        "date": "1月1日",
-        "time_slot": "12:00",
-        "total_seats": 0,
+        "cinema_name": "AI CINEMA新天地东台里影城",
+        "date": "6月19日",
+        "time_slot": "16:15",
+        "total_seats": 28,
         "sold_seats": 0,
-        "update_time": "12:00"
+        "update_time": "15:56"
     }
+
+    现在请处理你看到的这张图片，严格按照上面的 JSON 键名和格式吐出数据：
     """
     
     text_response = ""
@@ -103,7 +103,6 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             ]
         }
         try:
-            # 增加 proxies={...} 兜底阻断本地不规范代理导致的连接适配器报错
             response = requests.post(url, headers=headers, json=payload, timeout=30, proxies={"http": None, "https": None})
             res_json = response.json()
             if 'error' in res_json:
@@ -131,22 +130,17 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             st.error(f"请求 Gemini API 接口失败: {str(e)}")
             return None
 
-    # 【防御机制 2】：核心安全数据抽取，粉碎 "Expecting value" 报错
     if text_response:
         try:
-            # 剥离大模型顽固附带的 markdown 外壳
+            # 强效清洗多余外壳
             clean_text = text_response.replace("```json", "").replace("```", "").strip()
-            
-            # 用正则表达式把大括号 {} 及其内部的合法 JSON 数据完整抠出来
             json_match = re.search(r'\{.*\}', clean_text, re.DOTALL)
             if json_match:
                 clean_text = json_match.group()
-                
             return json.loads(clean_text)
         except Exception as json_err:
-            # 解析失败时，用醒目的方式捕获并打印出 AI 吐出的原生文字，防止程序闪退
             st.error(f"❌ 文本转换为表格失败！大模型未能按规定格式返回标准数据。")
-            st.warning(f"💡 AI 本次的实际回复内容为（可根据此原话排查原因）：\n\n{text_response}")
+            st.warning(f"💡 AI 本次的实际回复内容为：\n\n{text_response}")
             return None
             
     return None
@@ -159,7 +153,7 @@ if uploaded_file is not None:
             st.warning("⚠️ 无法真实分析：请输入 API Key 后再点击本按钮。")
             result = None
         else:
-            with st.spinner("AI 正在锁定影厅与语言行进行精细数数中..."):
+            with st.spinner("AI 正在使用范例推理算法定位数数中..."):
                 img_b64 = encode_image(uploaded_file)
                 result = analyze_image_with_ai(img_b64, api_key, model_provider)
         
