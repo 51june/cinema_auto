@@ -32,7 +32,6 @@ st.sidebar.header("⚙️ 配置中心")
 api_key = st.sidebar.text_input("请输入大模型 API Key", type="password")
 model_provider = st.sidebar.selectbox("选择AI模型供应商", ["智谱清言 GLM-4V (国内直连推荐)", "Gemini (需科学上网)"])
 
-# 【代码已更新】：完全清空了预设的影院名字，只留空表头
 if 'excel_data' not in st.session_state:
     df_init = pd.DataFrame(columns=["影院名称", "日期", "时间档", "总座位数", "已售", "最后更新时间"])
     st.session_state['excel_data'] = df_init
@@ -43,11 +42,13 @@ def encode_image(uploaded_file):
     return base64.b64encode(uploaded_file.read()).decode('utf-8')
 
 def analyze_image_with_ai(image_base64, api_key, provider):
+    # 【提示词更新】：严厉限制时间档只允许输出开始时间
     prompt = """
     你是一个专业的影院座位数据分析专家。请务必仔细看图，真实计算，绝不能捏造数据！请提取以下信息：
     1. 影院名称（例如：UME影城（上海新天地店）规范化为“UME影城 新天地”）
     2. 观影日期（如“今天 06月11日”提取出 “6月11日”）
-    3. 时间档（如 “13:50” 或 “16:05”）
+    3. 时间档：【极度重要】只能保留电影的“开始时间”，绝对不要包含散场时间！
+       例如：图上写着 “13:50-15:48” 或 “13:50 原版 2D”，你只能提取出 “13:50”。请严格过滤掉连字符后面的散场时间。
     4. 截图左上角的手机系统时间（作为最后更新时间，例如“13:46”）
     5. 总座位数：必须重新清点！请以中间灰色竖向虚线为界，仔细按排数清点所有方格（注意每排左右可能不对称）。
     6. 已售座位数：仔细清点所有变红/带有头像的红色已售方格数量。
@@ -114,11 +115,9 @@ if uploaded_file is not None:
     
     if st.button("🚀 开始自动分析并录入表格"):
         if not api_key:
-            st.warning("⚠️ 演示模式：将使用演示数据更新（填入 API Key 即可真实读图计算）")
-            result = {
-                "cinema_name": "UME影城 新天地", "date": "6月11日", "time_slot": "16:05", 
-                "total_seats": 157, "sold_seats": 2, "update_time": "14:10"
-            }
+            # 【核心修改点一】：没有填 Key 时的提示保持，但不再往表格内写入任何模拟测试数据，只提示需要 Key
+            st.warning("⚠️ 无法真实分析：请输入 API Key 后再点击本按钮。")
+            result = None
         else:
             with st.spinner("AI 正在严谨地查数座位中，请稍候..."):
                 img_b64 = encode_image(uploaded_file)
