@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import openpyxl
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-from openpyxl.utils import get_column_letter
 import io
 import base64
 import json
@@ -29,13 +28,39 @@ st.markdown("""
 st.title("🎬 影院座位截图自动录入系统")
 st.write("上传购票界面的座位截图，系统将自动识别并更新至 Excel 表格中。自动识别同场次并覆盖旧数据。")
 
+# ================= 侧边栏：配置与历史数据导入 =================
 st.sidebar.header("⚙️ 配置中心")
 api_key = st.sidebar.text_input("请输入大模型 API Key", type="password")
 model_provider = st.sidebar.selectbox("选择AI模型供应商", ["智谱清言 GLM-4V (国内直连推荐)", "Gemini (需科学上网)"])
 
-if 'excel_data' not in st.session_state:
+st.sidebar.markdown("---")
+st.sidebar.header("📂 历史数据记忆")
+uploaded_excel = st.sidebar.file_uploader("上传您上次下载的 Excel 统计表，系统将在此基础上更新覆盖", type=["xlsx"])
+
+# 初始化或加载表格数据
+if uploaded_excel is not None:
+    try:
+        # 读取用户上传的历史Excel
+        df_uploaded = pd.read_excel(uploaded_excel)
+        # 将导出的复杂表头还原为系统内部表头
+        df_uploaded = df_uploaded.rename(columns={
+            "影院名称(预售开启后更新影院列表)": "影院名称",
+            "最后更新时间(精确到分)": "最后更新时间"
+        })
+        # 移除公式列，后续重新生成
+        if '占比' in df_uploaded.columns:
+            df_uploaded = df_uploaded.drop(columns=['占比'])
+        # 填充空值
+        df_uploaded = df_uploaded.fillna("")
+        st.session_state['excel_data'] = df_uploaded
+        st.sidebar.success("✅ 历史表格加载成功！系统已恢复记忆，接下来的识别将覆盖表中的原数据。")
+    except Exception as e:
+        st.sidebar.error(f"读取 Excel 失败，请检查文件: {e}")
+elif 'excel_data' not in st.session_state:
+    # 如果没传表，就用空白模板
     df_init = pd.DataFrame(columns=["影院名称", "日期", "时间档", "总座位数", "已售", "最后更新时间"])
     st.session_state['excel_data'] = df_init
+
 
 uploaded_file = st.file_uploader("📸 拍照或选择手机相册中的截图", type=["jpg", "jpeg", "png"])
 
@@ -45,7 +70,7 @@ def encode_image(uploaded_file):
 def analyze_image_with_ai(image_base64, api_key, provider):
     prompt = """
     你是一个专业的影院座位数据分析和极其严谨的视觉计数专家。
-    AI系统往往会低估密集的座位网格数量，或者错误捏造已售数。你必须使用最高级别的精度重新清点！必须把每个可见的格子当成离散实体一个一个数！
+    AI系统往往会低估或高估密集的座位网格数量。你必须使用最高级别的精度重新清点！必须把每个可见的座位格子当成离散实体一个一个数！
 
     请提取以下信息：
     1. 影院名称（例如：UME影城（上海新天地店）规范化为“UME影城 新天地”）
@@ -53,10 +78,9 @@ def analyze_image_with_ai(image_base64, api_key, provider):
     3. 时间档：请提取电影的开始时间（例如：13:50）。严格过滤散场时间。
     4. 截图左上角的手机系统时间（作为最后更新时间）。
     5. 总座位数：必须按排从左到右极其精确地计数！
-       - 以中间灰色竖向虚线（走道）为界。
-       - 对所有可见的4排进行绝对精确的清点。
-       - **极其重要：对于 Maoyan 系统的这个截图（2号沙发VIP厅），必须确保 Row 1 清点出 6 个可见方格。Row 2、Row 3、Row 4 必须清点出每排 7 个可见方格。总数必须为 6+7+7+7 = 27 个。绝不能把底部‘推荐座位’区域的数字 1,2,3,4,5 当成座位数抄进来！**
-    6. 已售座位数：**仔细清点所有变红/带有猫头图像的红色已售方格数量。如果不确定，必须输出 0！对于这个截图，如果看到方格全部是蓝色或黄色白框，已售数必须为 0！**
+       - 极其重要防错指令：绝不能把底部‘推荐座位’或‘图例’区域的文字数字（如 1人, 2人, 3人, 4人, 5人）当成座位数加进去！
+       - 无论图片是哪个影厅，必须如实清点画面中实际供人乘坐的矩形方格数量，不要带有任何预设数字。
+    6. 已售座位数：仔细清点所有变红或带有猫头/人物图像的红色已售方格数量。如果不确定，或者只看到空座，必须输出 0！
 
     请严格以 JSON 格式输出，不要包含任何 Markdown 标记或多余文字。即使找不到某个信息，也要输出该字段并填空字符串，绝不能遗漏字段！
     {
@@ -117,6 +141,19 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             st.error(f"AI 识别解析出错啦: {str(e)}")
             return None
 
+# ================= 规范化匹配字段，防止 AI 输出细微格式误差导致重复新建行 =================
+def standardize_date(date_str):
+    nums = re.findall(r'\d+', str(date_str))
+    if len(nums) >= 2:
+        return f"{int(nums[0])}月{int(nums[1])}日" # 强制把 06月19日 转换成 6月19日
+    return str(date_str).strip()
+
+def standardize_time(time_str):
+    time_match = re.search(r'\d{1,2}:\d{2}', str(time_str))
+    if time_match:
+        return time_match.group()
+    return str(time_str).strip()
+
 if uploaded_file is not None:
     st.image(uploaded_file, caption='已上传的截图 preview', use_container_width=True)
     
@@ -130,35 +167,34 @@ if uploaded_file is not None:
                 result = analyze_image_with_ai(img_b64, api_key, model_provider)
         
         if result:
-            cinema_name = result.get('cinema_name', '未知影院')
-            date_str = str(result.get('date', '未知日期'))
-            time_slot = str(result.get('time_slot', ''))
-            total_seats = result.get('total_seats', 0)
-            sold_seats = result.get('sold_seats', 0)
-            update_time = result.get('update_time', '')
+            raw_cinema = str(result.get("cinema_name", "未知影院")).strip()
+            raw_date = result.get("date", "未知日期")
+            raw_time = result.get("time_slot", "")
             
-            # 【核心修改】：强制过滤日期，只保留 "X月X日" 的纯净格式
-            date_match = re.search(r'\d{1,2}月\d{1,2}日', date_str)
-            if date_match:
-                date_str = date_match.group()
+            # 净化字段格式
+            cinema_name = raw_cinema
+            date_str = standardize_date(raw_date)
+            time_slot = standardize_time(raw_time)
             
-            # 强制过滤时间
-            time_match = re.search(r'\d{1,2}:\d{2}', time_slot)
-            if time_match:
-                time_slot = time_match.group()
-                
+            total_seats = result.get("total_seats", 0)
+            sold_seats = result.get("sold_seats", 0)
+            update_time = str(result.get("update_time", "")).strip()
+            
             st.success("🎉 数据处理成功！")
             
             df = st.session_state['excel_data'].copy()
             
-            exact_match = (df['影院名称'] == cinema_name) & (df['日期'] == date_str) & (df['时间档'] == time_slot)
+            # 确保原表的数据也经过 strip 处理再比对，实现 100% 完美匹配
+            exact_match = (df['影院名称'].astype(str).str.strip() == cinema_name) & \
+                          (df['日期'].astype(str).str.strip() == date_str) & \
+                          (df['时间档'].astype(str).str.strip() == time_slot)
             
             if exact_match.any():
                 idx = df[exact_match].index[0]
                 df.loc[idx, '总座位数'] = total_seats
                 df.loc[idx, '已售'] = sold_seats
                 df.loc[idx, '最后更新时间'] = update_time
-                st.info(f"🔄 检测到相同场次，已自动为您覆盖更新实时数据。")
+                st.info(f"🔄 检测到相同场次 ({cinema_name} | {date_str} {time_slot})，已自动为您覆盖更新旧数据。")
             else:
                 new_row = {
                     "影院名称": cinema_name, 
@@ -169,6 +205,7 @@ if uploaded_file is not None:
                     "最后更新时间": update_time
                 }
                 df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                st.success(f"➕ 发现新场次 ({cinema_name} | {date_str} {time_slot})，已自动新增一行。")
                 
             st.session_state['excel_data'] = df
 
