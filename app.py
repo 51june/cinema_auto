@@ -37,27 +37,21 @@ st.sidebar.markdown("---")
 st.sidebar.header("📂 历史数据记忆")
 uploaded_excel = st.sidebar.file_uploader("上传您上次下载的 Excel 统计表，系统将在此基础上更新覆盖", type=["xlsx"])
 
-# 初始化或加载表格数据
 if uploaded_excel is not None:
     try:
-        # 读取用户上传的历史Excel
         df_uploaded = pd.read_excel(uploaded_excel)
-        # 将导出的复杂表头还原为系统内部表头
         df_uploaded = df_uploaded.rename(columns={
             "影院名称(预售开启后更新影院列表)": "影院名称",
             "最后更新时间(精确到分)": "最后更新时间"
         })
-        # 移除公式列，后续重新生成
         if '占比' in df_uploaded.columns:
             df_uploaded = df_uploaded.drop(columns=['占比'])
-        # 填充空值
         df_uploaded = df_uploaded.fillna("")
         st.session_state['excel_data'] = df_uploaded
-        st.sidebar.success("✅ 历史表格加载成功！系统已恢复记忆，接下来的识别将覆盖表中的原数据。")
+        st.sidebar.success("✅ 历史表格加载成功！接下来的识别将仅更新表中的【已售】数据。")
     except Exception as e:
         st.sidebar.error(f"读取 Excel 失败，请检查文件: {e}")
 elif 'excel_data' not in st.session_state:
-    # 如果没传表，就用空白模板
     df_init = pd.DataFrame(columns=["影院名称", "日期", "时间档", "总座位数", "已售", "最后更新时间"])
     st.session_state['excel_data'] = df_init
 
@@ -141,11 +135,10 @@ def analyze_image_with_ai(image_base64, api_key, provider):
             st.error(f"AI 识别解析出错啦: {str(e)}")
             return None
 
-# ================= 规范化匹配字段，防止 AI 输出细微格式误差导致重复新建行 =================
 def standardize_date(date_str):
     nums = re.findall(r'\d+', str(date_str))
     if len(nums) >= 2:
-        return f"{int(nums[0])}月{int(nums[1])}日" # 强制把 06月19日 转换成 6月19日
+        return f"{int(nums[0])}月{int(nums[1])}日"
     return str(date_str).strip()
 
 def standardize_time(time_str):
@@ -171,7 +164,6 @@ if uploaded_file is not None:
             raw_date = result.get("date", "未知日期")
             raw_time = result.get("time_slot", "")
             
-            # 净化字段格式
             cinema_name = raw_cinema
             date_str = standardize_date(raw_date)
             time_slot = standardize_time(raw_time)
@@ -184,23 +176,23 @@ if uploaded_file is not None:
             
             df = st.session_state['excel_data'].copy()
             
-            # 确保原表的数据也经过 strip 处理再比对，实现 100% 完美匹配
             exact_match = (df['影院名称'].astype(str).str.strip() == cinema_name) & \
                           (df['日期'].astype(str).str.strip() == date_str) & \
                           (df['时间档'].astype(str).str.strip() == time_slot)
             
             if exact_match.any():
                 idx = df[exact_match].index[0]
-                df.loc[idx, '总座位数'] = total_seats
+                # 【核心修改点】：删除了覆盖原表格总座位数的代码！
+                # df.loc[idx, '总座位数'] = total_seats  <-- 这行被彻底拿掉了
                 df.loc[idx, '已售'] = sold_seats
                 df.loc[idx, '最后更新时间'] = update_time
-                st.info(f"🔄 检测到相同场次 ({cinema_name} | {date_str} {time_slot})，已自动为您覆盖更新旧数据。")
+                st.info(f"🔄 检测到同场次 ({cinema_name} | {date_str} {time_slot})。已保留原总座位数，仅为您更新了【已售】和【时间】。")
             else:
                 new_row = {
                     "影院名称": cinema_name, 
                     "日期": date_str, 
                     "时间档": time_slot, 
-                    "总座位数": total_seats, 
+                    "总座位数": total_seats,  # 只有新增加的场次，才会录入 AI 数的总数
                     "已售": sold_seats, 
                     "最后更新时间": update_time
                 }
