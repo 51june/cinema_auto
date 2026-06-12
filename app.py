@@ -43,14 +43,13 @@ def encode_image(uploaded_file):
     return base64.b64encode(uploaded_file.read()).decode('utf-8')
 
 def analyze_image_with_ai(image_base64, api_key, provider):
-    # 【提示词大更新】：针对Maoyan猫眼VIP厅的4排27座，下达极度严厉的死命令，防止少数或乱抄
     prompt = """
     你是一个专业的影院座位数据分析和极其严谨的视觉计数专家。
     AI系统往往会低估密集的座位网格数量，或者错误捏造已售数。你必须使用最高级别的精度重新清点！必须把每个可见的格子当成离散实体一个一个数！
 
     请提取以下信息：
     1. 影院名称（例如：UME影城（上海新天地店）规范化为“UME影城 新天地”）
-    2. 观影日期（如“今天 06月11日”提取出 “6月11日”）
+    2. 观影日期（严格提取纯日期，例如从“下周五 6月19日”中只提取“6月19日”，过滤掉“今天/明天/周几”等修饰词）
     3. 时间档：请提取电影的开始时间（例如：13:50）。严格过滤散场时间。
     4. 截图左上角的手机系统时间（作为最后更新时间）。
     5. 总座位数：必须按排从左到右极其精确地计数！
@@ -132,103 +131,8 @@ if uploaded_file is not None:
         
         if result:
             cinema_name = result.get('cinema_name', '未知影院')
-            date_str = result.get('date', '未知日期')
+            date_str = str(result.get('date', '未知日期'))
             time_slot = str(result.get('time_slot', ''))
             total_seats = result.get('total_seats', 0)
             sold_seats = result.get('sold_seats', 0)
-            update_time = result.get('update_time', '')
-            
-            time_match = re.search(r'\d{1,2}:\d{2}', time_slot)
-            if time_match:
-                time_slot = time_match.group()
-                
-            st.success("🎉 数据处理成功！")
-            
-            df = st.session_state['excel_data'].copy()
-            
-            exact_match = (df['影院名称'] == cinema_name) & (df['日期'] == date_str) & (df['时间档'] == time_slot)
-            
-            if exact_match.any():
-                idx = df[exact_match].index[0]
-                df.loc[idx, '总座位数'] = total_seats
-                df.loc[idx, '已售'] = sold_seats
-                df.loc[idx, '最后更新时间'] = update_time
-                st.info(f"🔄 检测到相同场次，已自动为您覆盖更新实时数据。")
-            else:
-                new_row = {
-                    "影院名称": cinema_name, 
-                    "日期": date_str, 
-                    "时间档": time_slot, 
-                    "总座位数": total_seats, 
-                    "已售": sold_seats, 
-                    "最后更新时间": update_time
-                }
-                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                
-            st.session_state['excel_data'] = df
-
-st.subheader("📊 当前实时统计报表（数据预览）")
-st.dataframe(st.session_state['excel_data'], use_container_width=True)
-
-def convert_df_to_excel(df_data):
-    output = io.BytesIO()
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "票房与座位统计表"
-    ws.views.sheetView[0].showGridLines = True
-    
-    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-    zebra_fill = PatternFill(start_color="F2F5F9", end_color="F2F5F9", fill_type="solid")
-    white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
-    header_font = Font(name="Microsoft YaHei", size=11, bold=True, color="FFFFFF")
-    data_font = Font(name="Microsoft YaHei", size=10, bold=False, color="000000")
-    thin_side = Side(border_style="thin", color="D9D9D9")
-    border_all = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
-    
-    headers = ["影院名称(预售开启后更新影院列表)", "日期", "时间档", "总座位数", "已售", "占比", "最后更新时间(精确到分)"]
-    ws.append(headers)
-    ws.row_dimensions[1].height = 28
-    
-    for col_num, header in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col_num)
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        cell.border = border_all
-
-    for r_idx, row in enumerate(df_data.itertuples(index=False), 2):
-        row_vals = [row[0], row[1], row[2], row[3], row[4], "", row[5]]
-        ws.append(row_vals)
-        ws.row_dimensions[r_idx].height = 22
-        
-        for c_idx in range(1, 8):
-            cell = ws.cell(row=r_idx, column=c_idx)
-            cell.font = data_font
-            cell.border = border_all
-            cell.fill = zebra_fill if r_idx % 2 == 0 else white_fill
-            
-            if c_idx == 1:
-                cell.alignment = Alignment(horizontal="left", vertical="center")
-            elif c_idx in [2, 3, 7]:
-                cell.alignment = Alignment(horizontal="center", vertical="center")
-            elif c_idx in [4, 5]:
-                cell.alignment = Alignment(horizontal="right", vertical="center")
-                if cell.value != "": cell.number_format = '#,##0'
-            elif c_idx == 6:
-                cell.alignment = Alignment(horizontal="right", vertical="center")
-                cell.number_format = '0.0%'
-                cell.value = f'=IFERROR(E{r_idx}/D{r_idx}, "")'
-                
-    ws.column_dimensions['A'].width = 32
-    ws.column_dimensions['G'].width = 24
-    wb.save(output)
-    return output.getvalue()
-
-if st.button("📥 下载已更新的专业 Excel 报表"):
-    excel_bytes = convert_df_to_excel(st.session_state['excel_data'])
-    st.download_button(
-        label="点击下载 .xlsx 文件",
-        data=excel_bytes,
-        file_name="最新影院预售统计表.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+            update_time = result.get('
